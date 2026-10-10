@@ -68,12 +68,6 @@
     <ClInclude Include="src\InitialTestSlots.inc" />
     <ClInclude Include="src\TesterGatherSlots.inc" />
     <ClInclude Include="src\OriginsAnim.inl" />
-    <ClInclude Include="src\CameraDiag.inl" />
-    <ClInclude Include="src\LofCamera.inl" />
-    <ClInclude Include="src\HayCamera.inl" />
-    <ClInclude Include="src\GraphVars.inl" />
-    <ClInclude Include="src\StateLog.inl" />
-    <ClInclude Include="src\CtorProbe.inl" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\CommonLibACU\ACU-RE\ACU-RE.vcxproj"><Project>{3ce83ce0-69aa-4c6e-9476-2e9dc734b47f}</Project></ProjectReference>

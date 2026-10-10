@@ -1,5 +1,5 @@
 /*
-BackEjectLoF - an ACUFixes-loader plugin (v0.27.1, probe inspector plus experiments; H = Origins backflip; J = trajectory recorder; K = camera selector diagnostic; L = LoF camera during the eject; M = early hay camera; N = eject action sampler; O = graph variable recorder; P = player state log; Q = state constructor probe).
+BackEjectLoF - an ACUFixes-loader plugin (v0.18.0, probe inspector plus experiments; H = Origins backflip; J = trajectory recorder).
 
 Purpose: record which parkour "probes" (level-placed parkour points) the game's parkour scanners test,
 so we can learn whether haystack probes (type 36) are seen while the player hangs on a ledge.
@@ -158,93 +158,6 @@ While recording, action records are folded into a session store keyed by (enum, 
 gather records into a per-tester-table store. The player position is sampled every 15 frames.
 Players only unless "Include NPCs" is checked when the session starts.
 
-K) Camera selector diagnostic (v0.19; menu checkbox "Log camera selector changes (v0.19)", default ON; read-only, polling
-  only, frame side only, no hooks). Why: find which camera selector node the camera uses, and which node it blends toward,
-  when the back eject and the hang change the camera. Each frame it reads the first camera component of the CameraManager
-  singleton: +0x8F8 (CameraData), +0x9B8 (SharedBlock of the current selector blender node) and +0x9C0 -> +0x18 (a second
-  node). When any of these changes it logs one line with the node type names. The first time a node is seen it logs a dump:
-  the type chain, the first 0x60 bytes, the rule condition (type members, a few levels deep), the camera data type, the
-  transitions and the children. Children are dumped gradually (8 per frame, at most 300 nodes per session). Type names come
-  from the game's own GetTI (vtable slot 5), called only when the vtable lies in ACU.exe .rdata and slots 0..5 all point into .text.
-  Every read is SEH-guarded; a fault is counted, and more than 1000 turn the feature off for the session. Log: the normal
-  BackEjectLoF log. Code: CameraDiag.inl.
-  v0.22: once per session (300 frames after start, or the menu button "Dump camera tree") the whole selector tree from CameraManager+0x10 (ACU_Camera_Root) and +0x18 is logged as 'tree ...' lines, one per node, with the rule types.
-  v0.24: default OFF (the camera log is no longer needed; the menu checkbox can still turn it on).
-
-L) LoF camera during the eject (v0.21; menu checkboxes "LoF camera during the eject (v0.21)" and "Bridge to the hay
-  camera at landing (v0.21)", both default ON). Why: the vanilla leap of faith hands the camera over to the hay camera in
-  the air; ours fell back to the default camera for about 0.3 s. No ACU.exe writes: the v0.20 vtable slot patch failed in
-  game. Instead the BooleanRuleCondition vtable (0x14306F850) is copied into our DLL, its slot +0x58 (GetResult, original
-  0x1420B5210, checked first) is replaced by our hook, and only the rule objects we find get our copy as their vtable
-  pointer. Two rules, found by a bounded breadth-first search (depth 3, 200 nodes, 64 children per node) from the current
-  camera node every 30 frames while unknown, and re-checked every 60 frames: the LoF node 0x1316A17B3E (SharedBlock handle,
-  rule at node+0x18) has its rule forced true from our arm until the end; its parent group 0x102BC104D7 (child of the root
-  0x863EA9EBA) has its rule forced true only in the landing phase, from player z <= hay z + 1.5 m until the hay camera
-  0x139346D58A appears, 0.6 s after landing, disarm or 6 s, whichever comes first. Hook rules: no allocation, no logging,
-  no locks, no SEH, atomics only. Code: LofCamera.inl. Log: "lofcam: ..." lines in the normal BackEjectLoF log.
-  v0.22: disabled (Install is not called; the user rejected it in game).
-
-M) Early hay camera (v0.23; menu checkbox "Early hay camera at landing (v0.23)", default ON). Why: the vanilla leap of
-  faith switches the camera to the hay (hide spot) camera about 1 m above the hay; ours switched to the default camera
-  at landing and only reached the hay camera 0.3 s later. Two rules are forced: the group node 0x103CA083FC (handle,
-  depth 3 below the root, BooleanRuleCondition, its list comes before the default/airborne branch) and its hay camera
-  node 0x139346D58A (BooleanRuleCondition with a HideSpotTypeCondition child). Same technique as L: per-object vtable
-  swap of the two rule objects to a copy of the BooleanRuleCondition vtable 0x14306F850 whose slot +0x58 (original
-  0x1420B5210, checked first) is HayRuleHook. No ACU.exe writes. The rules are found by a bounded breadth-first search
-  from the root 0x863EA9EBA (depth 6, 800 nodes, 64 children per list, both lists) every 30 frames while unknown, and
-  re-checked every 60 frames. When forced: from the first frame after 0.3 s of the arm where the player is within
-  max(1.5 m, 0.2 s of fall speed) above the hay top, until the game's own results of both rules are true, 0.8 s after
-  the force starts, disarm, or 6 s after the arm, whichever comes first. The hook always calls the original first, and
-  only changes the result of these two rules while forcing. Hook rules as in L. Code: HayCamera.inl. Log: "haycam: ..."
-  lines in the normal BackEjectLoF log.
-  v0.24: disabled (Install is no longer called; the user rejected it, "camera is still broken"). No rule is swapped.
-
-N) Eject action sampler (v0.24; no menu checkbox, runs with the trajectory recorder, read-only, frame side only, no hooks).
-  Why: in game every eject lands about 1.9 to 2.0 s after the arm whatever the height (13 to 62 m), although our clip is
-  2.4 to 3.7 s long, so the game pulls the player to the target on its own fixed timing. This section looks for the
-  duration and progress fields in the eject action object (0x290 bytes, allocated by the action factory for enum 36).
-  The action is g_injectedEject, the one experiment E appended. At each recording start the pointer is taken; each
-  trajectory sample (same frame, same time) also copies the 0x290 action bytes (SEH-guarded; a failed read only marks the
-  sample not ok). At most kTrajMaxSamples samples. When the recording is written, the file
-  <plugin dir>\BackEjectLoF\traj\action_<session stamp>_<serial>.csv is written too: "# " header lines, the initial values
-  of the first readable sample for every 4-byte offset (float and int view), then one column per offset whose 32-bit
-  value changed during the recording ("o%03X"), with t and z per row. Values with a zero exponent or an all-ones
-  exponent (and not zero) are printed as hex ("i%08X"). Log: "action sampler: ..." lines.
-
-O) Graph variable recorder (v0.25; menu checkbox "Record animation graph variables (v0.25)", default ON; read-only, frame
-  side only, no hooks). Why: every eject lands about 1.9 s after the arm at every height, because the animation graph warps
-  the root motion through its graph variables (TargetHeight, TargetDistance, SyncA..E_*, LandingHeight, FreeFallState,
-  HayStack, WallEject, TimeRemaining, ...). This section records all of them over time, to compare a vanilla leap of faith
-  with our eject. Each frame, right after haycam::Frame, the player's AtomAnimComponent (pD0 = GraphEvaluation) is read:
-  rtcp hashes and offsets, and the values in stru400.graphVarsBuffer (SEH-guarded, up to 1024 variables), into a ring of
-  300 samples allocated once. A dump, <plugin dir>\BackEjectLoF\traj\graph_<session stamp>_<k>.csv, is written 2.0 s after
-  a rising edge of the HayStack variable, or 6.0 s after a new eject arm, at most 12 per session. The file lists every
-  variable as a "# var" line (hash, value in the oldest sample), then one column per variable that changed inside the ring.
-  Code: GraphVars.inl. Log: "graphvars: ..." lines.
-
-P) Player state log (v0.26; menu checkbox "Log player states (v0.26)", default ON; read-only apart from one hook). Why:
-  to compare the player's human states during a vanilla leap of faith with our eject. Every state Enter() is called from
-  one place in ACU.exe: at 0x1427554E3 (mov rax, [rbx+0xE0], 7 bytes, RBX = the state node about to be entered). The hook
-  is there, with the same 7 bytes stolen, so it never overlaps ACUFixes' logger at 0x1427554F2. Install verifies the bytes
-  first and skips the hook on a mismatch. The callback records only player states (same test as ACUFixes: topmost parent
-  of the node is HumanStatesHolder::GetForPlayer(), or the node is the holder itself) into a lock-free 4096-entry ring
-  (QPC, enter function, node, depth). The frame side copies the ring every frame into a 1500-entry history with the
-  player z and the Origins armed flag at drain time. A dump, <plugin dir>\BackEjectLoF\traj\states_<graph stamp>_<k>.csv,
-  is written next to each graph dump (same stamp, k, trigger and reason), with the entries from 12 s before to 8 s after
-  the trigger. Code: StateLog.inl. Log: "statelog: ..." lines.
-
-Q) State constructor probe (v0.27.1; menu checkbox "Log state constructors (v0.27)", default ON; read-only apart from two
-  function-start hooks). Why: to see what the game passes into the constructors of InSafeJumpOrLoweringToHang (0x141ABA990,
-  kind SJ) and DetachingFromWall (0x141A274D0, kind DW). Each hook steals the same 9 bytes (push rbx; sub rsp,20h; mov rbx,rcx),
-  verified first; a mismatch skips only that hook. The callback copies the registers, xmm0..7 (low 4 floats), 48 qwords from rsp
-  and, for every candidate value, the state enter function at +0xE0 when it lies in ACU.exe code, plus the player test. It
-  writes a 256-entry lock-free ring. The frame side keeps a 256-entry history and counts entries per (kind, ret). The first 2
-  entries of each new key are logged in full. When a player enter of InSafeJump (0x141ADC860) or DetachingFromWall (0x141A4B010)
-  is seen (StateLog OnEnterState counters), a "ctorprobe trigger SJenter|DWenter" line is written and the matching constructor
-  entries from 0.5 s before to 0.05 s after the enter are logged in full, newest first, at most 6 per trigger, for 3 frames.
-  Then a "ctorprobe counts:" line lists the top 16 keys. Full logs are capped at 200 per session.
-  Code: CtorProbe.inl (and the enter counters in StateLog.inl). Log: "ctorprobe: ..." lines.
-
 Hook rules: never throw, never allocate, never log to file, never block (TryAcquireSRWLockExclusive only).
 SEH helpers are plain functions with no C++ objects, so __try is legal in them.
 
@@ -256,11 +169,6 @@ Data: <plugin dir>\BackEjectLoF\BackEjectLoF-log.log (truncated on each start).
 #include "ACU/World.h"
 #include "ACU/Entity.h"
 #include "ACU/ACUGetSingletons.h"
-#include "ACU/AtomAnimComponent.h"   // v0.25 (O): GraphEvaluation, AtomGraph_RTCP
-#include "ACU/AtomGraph.h"
-#include "ACU/HumanStatesHolder.h"            // v0.26 (P): FunctorBase, HumanStatesHolder::GetForPlayer
-#include "AutoAssemblerKinda/AutoAssemblerKinda.h"   // v0.26 (P): mid-function hook
-#include "ACU/CameraManager.h"
 #include "Common_Plugins/Common_PluginSide.h"
 #include "ACU/Animation.h"
 #include "ACU/ManagedPtrs/ManagedPtrs.h"
@@ -2387,113 +2295,6 @@ void WriteTrajLine(std::ofstream& o, const char* fmt, ...)
     o << buf << "\n";
 }
 
-// ---------------------------------------------------------------------------------------------------------
-// N) Eject action sampler (v0.24). Read-only, frame side only; same window and sample count as the recorder.
-// ---------------------------------------------------------------------------------------------------------
-constexpr size_t kActSize = 0x290;
-
-struct ActSample
-{
-    double t;                  // QPC seconds since the arm (same value as the trajectory sample)
-    float z;                   // player z, or -1 when there is no player position
-    bool ok;                   // the action bytes were read
-    uint8_t bytes[0x290];      // copy of the action object (kActSize bytes)
-};
-
-std::vector<ActSample> g_act;  // reserved at init
-uint64 g_actPtr = 0;           // action object sampled by the current recording (g_injectedEject at its start)
-
-// Plain SEH function: no C++ objects, so __try is allowed.
-bool ReadActionBytesGuarded(uint64 action, uint8_t* out)
-{
-    if (action < 0x10000ULL) return false;
-    __try {
-        memcpy(out, reinterpret_cast<const void*>(action), kActSize);
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
-// Writes action_<stamp>_<serial>.csv for the samples of the current recording. Called by FinishTraj.
-void WriteActionCsv(const std::string& stamp, uint32 serial)
-{
-    const std::string name = "action_" + stamp + "_" + std::to_string(serial) + ".csv";
-    const fs::path path = AbsolutePathInThisDLLDirectory("BackEjectLoF\\traj\\" + name);
-    fs::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::trunc);
-    if (!out) {
-        LogLine("action sampler: could not write %s", path.string().c_str());
-        return;
-    }
-
-    const ActSample* firstOk = nullptr;
-    size_t okCount = 0;
-    for (const ActSample& s : g_act) {
-        if (!s.ok) continue;
-        ++okCount;
-        if (!firstOk) firstOk = &s;
-    }
-
-    WriteTrajLine(out, "# BackEjectLoF 0.27.1 eject action sampler (read-only)");
-    WriteTrajLine(out, "# action=0x%llX", static_cast<unsigned long long>(g_actPtr));
-    WriteTrajLine(out, "# samples=%zu", g_act.size());
-    WriteTrajLine(out, "# ok_samples=%zu", okCount);
-    if (!firstOk) {
-        out.close();
-        LogLine("action sampler: no ok samples, wrote header only to %s (samples=%zu)", name.c_str(), g_act.size());
-        return;
-    }
-
-    for (size_t o = 0; o < kActSize; o += 4) {
-        uint32 iv = 0;
-        float fv = 0.0f;
-        memcpy(&iv, firstOk->bytes + o, 4);
-        memcpy(&fv, &iv, 4);
-        WriteTrajLine(out, "# o%03X f=%.6g i=0x%08X", static_cast<unsigned>(o), static_cast<double>(fv), static_cast<unsigned>(iv));
-    }
-
-    // Changed offsets: 4-byte values that differ between any two ok samples (compared with the first ok sample).
-    std::vector<size_t> changed;
-    for (size_t o = 0; o < kActSize; o += 4) {
-        uint32 ref = 0;
-        memcpy(&ref, firstOk->bytes + o, 4);
-        for (const ActSample& s : g_act) {
-            if (!s.ok) continue;
-            uint32 v = 0;
-            memcpy(&v, s.bytes + o, 4);
-            if (v != ref) { changed.push_back(o); break; }
-        }
-    }
-
-    std::string header = "t,z";
-    char cb[64];
-    for (size_t o : changed) {
-        snprintf(cb, sizeof(cb), ",o%03X", static_cast<unsigned>(o));
-        header += cb;
-    }
-    out << header << "\n";
-
-    for (const ActSample& s : g_act) {
-        if (!s.ok) continue;
-        snprintf(cb, sizeof(cb), "%.4f,%.3f", s.t, static_cast<double>(s.z));
-        std::string row = cb;
-        for (size_t o : changed) {
-            uint32 v = 0;
-            memcpy(&v, s.bytes + o, 4);
-            float fv = 0.0f;
-            memcpy(&fv, &v, 4);
-            const uint32 expo = (v >> 23) & 0xFFu;
-            const bool isZero = (v & 0x7FFFFFFFu) == 0;
-            if ((expo == 0 || expo == 0xFF) && !isZero) snprintf(cb, sizeof(cb), ",i%08X", static_cast<unsigned>(v));
-            else snprintf(cb, sizeof(cb), ",%.6g", static_cast<double>(fv));
-            row += cb;
-        }
-        out << row << "\n";
-    }
-    out.close();
-
-    LogLine("action sampler: wrote %s, samples=%zu ok=%zu changedOffsets=%zu", name.c_str(), g_act.size(), okCount, changed.size());
-}
-
 // Writes the recording to traj_<serial>.csv, then logs one line. reason says why the recording ended.
 void FinishTraj(const char* reason)
 {
@@ -2512,7 +2313,7 @@ void FinishTraj(const char* reason)
         return;
     }
 
-    WriteTrajLine(out, "# BackEjectLoF 0.27.1 trajectory (read-only record of one Origins eject)");
+    WriteTrajLine(out, "# BackEjectLoF 0.18.0 trajectory (read-only record of one Origins eject)");
     WriteTrajLine(out, "# serial=%u", static_cast<unsigned>(st.serial));
     WriteTrajLine(out, "# finish=%s", reason);
     WriteTrajLine(out, "# attempt_frame=%llu", static_cast<unsigned long long>(st.attemptFrame));
@@ -2549,7 +2350,6 @@ void FinishTraj(const char* reason)
         out << line << "\n";
     }
     out.close();
-    WriteActionCsv(stamp, st.serial);   // v0.24 (N): action sampler file, same stamp and serial
 
     const double dur = g_traj.empty() ? 0.0 : g_traj.back().t;
     if (!last) {
@@ -2589,9 +2389,6 @@ void StartTraj(const origins::ArmSnapshot& a)
     LogLine("trajectory: recording arm serial %u (variant f%d, drop %.2f m, target %.1f frames, window %.2f s)",
             static_cast<unsigned>(a.serial), a.flight, static_cast<double>(a.drop), static_cast<double>(a.target),
             static_cast<double>(origins::WindowFor(a.flight)));
-    g_act.clear();                              // v0.24 (N)
-    g_actPtr = g_injectedEject.load();
-    LogLine("action sampler: action 0x%llX", static_cast<unsigned long long>(g_actPtr));
 }
 
 // Frame callback: starts, samples and ends recordings. playerFault is the fault flag of this frame's player read.
@@ -2629,14 +2426,6 @@ void TrajFrame(uint64 frame, bool playerFault)
     if (g_hasPlayer) memcpy(s.pos, g_playerPos, sizeof(s.pos));
     s.armed = a.armed;
     g_traj.push_back(s);
-
-    if (g_act.size() < kTrajMaxSamples) {       // v0.24 (N): same frame and time as the trajectory sample
-        ActSample as{};
-        as.t = t;
-        as.z = g_hasPlayer ? g_playerPos[2] : -1.0f;
-        as.ok = ReadActionBytesGuarded(g_actPtr, as.bytes);
-        g_act.push_back(as);
-    }
 }
 
 // Menu: the checkbox and the recorder status.
@@ -2649,12 +2438,6 @@ void DrawTrajMenu()
     if (g_trajLast[0]) ImGui::TextUnformatted(g_trajLast);
 }
 
-#include "CameraDiag.inl"   // K) v0.19: camera selector diagnostic (namespace camdiag)
-#include "LofCamera.inl"     // L) v0.20: LoF camera during the eject (namespace lofcam)
-#include "HayCamera.inl"     // M) v0.23: early hay camera during the eject (namespace haycam)
-#include "GraphVars.inl"     // O) v0.25: graph variable recorder (namespace graphvars)
-#include "StateLog.inl"      // P) v0.26: player state log (namespace statelog)
-#include "CtorProbe.inl"     // Q) v0.27: state constructor probe (namespace ctorprobe)
 
 // Runs every frame, menu open or closed. Game calls are guarded.
 void GameFrame()
@@ -2671,12 +2454,6 @@ void GameFrame()
     PruneRecent(frame);
     if (g_recording) SampleIfDue(frame);
     TrajFrame(frame, playerFault);      // v0.16 (J): trajectory recorder, after origins::Frame so its disarm is seen
-    camdiag::Frame(frame);              // v0.19 (K): camera selector diagnostic, read-only
-    lofcam::Frame();                    // v0.20 (L): LoF rule search and arm edge log
-    haycam::Frame();                    // v0.23 (M): early hay camera rule search and force window
-    graphvars::Frame();                 // v0.25 (O): graph variable recorder, read-only
-    statelog::Frame();                  // v0.26 (P): player state log, read-only
-    ctorprobe::Frame();                 // v0.27 (Q): state constructor probe, read-only
 
     if (g_faults.load() >= kMaxFaults && !g_faultLogged) {
         g_faultLogged = true;
@@ -2993,7 +2770,7 @@ void DrawExpE()
 
 void DrawMenu()
 {
-    ImGui::Text("BackEjectLoF 0.27.1 (probe inspector, slots 0x4B, 0x21, 0x25, LoF 0x76/0x73, eject 0x76/0x64)");
+    ImGui::Text("BackEjectLoF 0.18.0 (probe inspector, slots 0x4B, 0x21, 0x25, LoF 0x76/0x73, eject 0x76/0x64)");
     ImGui::Text("Action hook: installed %zu / %zu, skipped %zu", g_installedCount, kRowCount, g_skippedCount);
     ImGui::Text("Tester hook: installed %zu / %zu, skipped %zu; back-eject hook: %s", g_tInstalledCount, kTesterRowCount,
                 g_tSkippedCount, g_backInstalled ? "installed" : "not installed");
@@ -3058,12 +2835,6 @@ void DrawMenu()
     ImGui::Separator();
     origins::Menu();
     DrawTrajMenu();                     // v0.16 (J)
-    camdiag::Menu();                    // v0.19 (K)
-    lofcam::Menu();                     // v0.20 (L)
-    haycam::Menu();                     // v0.23 (M)
-    graphvars::Menu();                  // v0.25 (O)
-    statelog::Menu();                   // v0.26 (P)
-    ctorprobe::Menu();                  // v0.27 (Q)
 
     ImGui::Separator();
     if (ImGui::Button("Write snapshot")) WriteSnapshot("button");
@@ -3086,7 +2857,7 @@ public:
     {
         fs::create_directories(AbsolutePathInThisDLLDirectory("BackEjectLoF"));
         g_log.open(AbsolutePathInThisDLLDirectory("BackEjectLoF\\BackEjectLoF-log.log"), std::ios::trunc);
-        LogLine("BackEjectLoF 0.27.1 loaded (slots 0x4B, 0x21, 0x25, LoF 0x76/0x73, eject 0x76/0x64; experiment C default OFF, E default ON; trajectory recorder default ON)");
+        LogLine("BackEjectLoF 0.18.0 loaded (slots 0x4B, 0x21, 0x25, LoF 0x76/0x73, eject 0x76/0x64; experiment C default OFF, E default ON; trajectory recorder default ON)");
         origins::Load();
         g_drain.reserve(kRingSize);
         g_recent.reserve(kRingSize * 4);
@@ -3094,8 +2865,6 @@ public:
         g_gatherRecent.reserve(kGatherRingSize * 4);
         g_samples.reserve(kMaxSamples);
         g_traj.reserve(kTrajMaxSamples);     // v0.16 (J)
-        g_act.reserve(kTrajMaxSamples);      // v0.24 (N)
-        graphvars::Init();                   // v0.25 (O): ring allocated once (about 1.2 MB)
     }
 
     virtual bool InitStage_WhenCodePatchesAreSafeToApply(ACUPluginLoaderInterface&) override
@@ -3106,10 +2875,6 @@ public:
         InstallLofHooks();
         InstallEjectFinalHook();
         InstallEjectRangeHook();
-        // v0.22: lofcam (section L) disabled: the user rejected the forced LoF camera (v0.21). Without Install no rule is ever swapped.
-        // v0.24: haycam (section M) disabled: the user rejected it ("camera is still broken"). Without Install no rule is swapped.
-        statelog::Install();                 // v0.26 (P): verifies the 7 bytes at 0x1427554E3, then activates the hook
-        ctorprobe::Install();                // v0.27 (Q): verifies the 9 bytes at each constructor, then activates its hook
         return true;
     }
 

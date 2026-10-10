@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------------------------------------
-// OriginsAnim.inl (v0.26.0): the "Origins backflip" animation, section H) of the header comment in BackEjectLoF.cpp.
+// OriginsAnim.inl (v0.18.0): the "Origins backflip" animation, section H) of the header comment in BackEjectLoF.cpp.
 // Included by BackEjectLoF.cpp inside its anonymous namespace, after LogLine, g_eAppended and g_hasPlayer, and before
 // the experiment E code, which calls ArmFromGameThread() right after it appends our eject.
 // Needs the includes ACU/Animation.h, ACU/ManagedPtrs/ManagedPtrs.h, ACU/Memory/ACUAllocs.h, SimpleJSON and ToFromFile.
@@ -1513,7 +1513,7 @@ void Frame(bool playerPresent)
 // Menu: its own collapsible header inside DrawMenu.
 void Menu()
 {
-    if (!ImGui::CollapsingHeader("Origins backflip (v0.26.0)")) return;
+    if (!ImGui::CollapsingHeader("Origins backflip (v0.18.0)")) return;
     if (!g_anyParsed) { ImGui::TextDisabled("Inactive: no origins\\mapping.json or no clip loaded (see log)"); return; }
 
     bool on = g_on.load();
