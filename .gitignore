@@ -1,0 +1,11 @@
+# Build output and VS files
+x64/
+build/
+.vs/
+*.user
+*.obj
+*.pch
+*.dll
+*.lib
+*.exp
+*.pdb
